@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.preference.PreferenceManager
 import android.view.WindowManager
 import android.widget.Toast
@@ -49,6 +51,17 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
     private var currentGnssAccuracy = 0.0f
     private var lastPlottedGeoPoint: GeoPoint? = null
 
+    private val navHandler = Handler(Looper.getMainLooper())
+    private val navTickRunnable = object : Runnable {
+        override fun run() {
+            if (!isNavigating) return
+            val isOutage = outageDetector.isOutage()
+            val telemetry = engine.tick(isOutage, currentGnssAccuracy)
+            renderTelemetry(telemetry)
+            navHandler.postDelayed(this, 100L) // 10Hz
+        }
+    }
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -78,7 +91,6 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
         setupMapView()
         setupControls()
 
-        // Auto-start immediately upon launch!
         checkPermissionsAndStart()
     }
 
@@ -96,10 +108,7 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
             controller.setZoom(18.0)
 
             addMapListener(object : MapListener {
-                override fun onScroll(event: ScrollEvent?): Boolean {
-                    // If user manually drags map, temporarily pause auto-follow
-                    return false
-                }
+                override fun onScroll(event: ScrollEvent?): Boolean = false
                 override fun onZoom(event: ZoomEvent?): Boolean = false
             })
         }
@@ -161,22 +170,18 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
         if (isNavigating) return
         isNavigating = true
 
+        engine.start()
         locationTracker.start()
         outageDetector.start()
+
+        navHandler.post(navTickRunnable)
 
         updateStatusUI(isGnssOutage = false, reason = "Acquiring Satellites")
     }
 
     // --- SensorStreamListener Callbacks ---
     override fun onImuFrame(ax: Float, ay: Float, az: Float, gx: Float, gy: Float, gz: Float) {
-        if (!isNavigating) return
-
-        val isOutage = outageDetector.isOutage()
-        val telemetry = engine.processImuTick(ax, ay, az, gx, gy, gz, isOutage, currentGnssAccuracy)
-
-        runOnUiThread {
-            renderTelemetry(telemetry)
-        }
+        // Linear acceleration is handled by IMUSensorManager
     }
 
     override fun onGnssLocation(location: Location) {
@@ -189,7 +194,6 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
             engine.onGnssLocationUpdate(location)
         }
 
-        // On initial location fix: immediately position map and pin
         val geoPoint = GeoPoint(location.latitude, location.longitude)
         lastKnownGeoPoint = geoPoint
         if (lastPlottedGeoPoint == null) {
@@ -232,7 +236,7 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
             binding.tvStatusBadge.setBackgroundResource(R.drawable.bg_badge_outage)
             binding.tvStatusBadge.setTextColor(ContextCompat.getColor(this, R.color.status_gnss_outage))
 
-            binding.tvSourceSubtitle.text = "GNSS Lost ($reason) - AI Dead Reckoning Active"
+            binding.tvSourceSubtitle.text = "GNSS Lost ($reason) - ONNX ZUPT Dead Reckoning Active"
             vehicleMarker?.icon = ContextCompat.getDrawable(this, R.drawable.ic_navigation_arrow_outage)
         } else {
             binding.tvStatusBadge.text = getString(R.string.status_gnss_active)
@@ -251,7 +255,6 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
         binding.tvHeadingValue.text = String.format(Locale.US, "%.0f° %s", t.headingDegrees, getCardinalDirection(t.headingDegrees))
         binding.tvHeadingRate.text = String.format(Locale.US, "%+.1f°/s", t.headingRateDegPerSec)
 
-        // Total distance traveled
         if (t.totalTripDistanceMeters >= 1000.0) {
             binding.tvTotalDistance.text = String.format(Locale.US, "%.2f km", t.totalTripDistanceMeters / 1000.0)
         } else {
@@ -261,7 +264,6 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
         binding.tvDrDistance.text = String.format(Locale.US, "%.1f m", t.drDistanceMeters)
         binding.tvAccuracyValue.text = String.format(Locale.US, "± %.1f m", t.accuracyMeters)
 
-        // Update Vehicle Marker and Continuous Breadcrumb Trace
         if (t.latitude != 0.0 && t.longitude != 0.0) {
             val currentPoint = GeoPoint(t.latitude, t.longitude)
             lastKnownGeoPoint = currentPoint
@@ -269,7 +271,6 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
             vehicleMarker?.position = currentPoint
             vehicleMarker?.rotation = t.headingDegrees
 
-            // Append point to active polyline if moved at least 0.8 meters
             val lastP = lastPlottedGeoPoint
             val distanceSinceLast = if (lastP != null) currentPoint.distanceToAsDouble(lastP) else 100.0
 
@@ -307,6 +308,9 @@ class MainActivity : AppCompatActivity(), SensorStreamListener, GnssOutageListen
 
     override fun onDestroy() {
         super.onDestroy()
+        isNavigating = false
+        navHandler.removeCallbacks(navTickRunnable)
+        engine.stop()
         locationTracker.stop()
         outageDetector.stop()
     }

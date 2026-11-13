@@ -20,15 +20,15 @@ data class NavigationTelemetry(
 )
 
 /**
- * Core Dead Reckoning Engine.
- * Integrates instant virtual alignment, 10Hz sensor preprocessor,
- * pure Kotlin 1D-CNN neural network, and continuous kinematic positioning.
+ * Dead Reckoning Engine powered by:
+ * 1. IMUSensorManager (Linear Acceleration gravity stripping)
+ * 2. VelocityEngine (ONNX Dual-Head 1D-CNN with ZUPT noise gate)
+ * 3. 1D Velocity Kalman Filter for smoothing
  */
 class DeadReckoningEngine(context: Context) {
 
-    val virtualAlignment = VirtualAlignment()
-    val preprocessor = SensorPreprocessor(context)
-    val model = ModelInference(context)
+    val imuSensorManager = IMUSensorManager(context)
+    val velocityEngine = VelocityEngine(context)
     private val velocityKalman = VelocityKalmanFilter(initialVelocity = 0.0f)
 
     var currentLatitude: Double = 0.0
@@ -50,13 +50,18 @@ class DeadReckoningEngine(context: Context) {
         private set
 
     companion object {
-        const val DT: Float = 0.1f // 10Hz sampling
+        const val DT: Float = 0.1f // 10Hz tick
         const val METERS_PER_LAT_DEGREE = 111139.0
     }
 
-    /**
-     * Called whenever a fresh valid GNSS fix arrives from the satellites.
-     */
+    fun start() {
+        imuSensorManager.startRecording()
+    }
+
+    fun stop() {
+        imuSensorManager.stopRecording()
+    }
+
     fun onGnssLocationUpdate(location: Location) {
         val prevLat = currentLatitude
         val prevLon = currentLongitude
@@ -74,7 +79,7 @@ class DeadReckoningEngine(context: Context) {
 
         if (hasPositionFix && prevLat != 0.0 && prevLon != 0.0) {
             val dist = calculateDistance(prevLat, prevLon, currentLatitude, currentLongitude)
-            if (dist < 100.0) { // filter GPS teleport jumps
+            if (dist < 100.0) {
                 totalDistanceMeters += dist
             }
         }
@@ -85,55 +90,47 @@ class DeadReckoningEngine(context: Context) {
     }
 
     /**
-     * 10Hz sensor tick.
+     * Executes 10Hz navigation update.
      */
-    fun processImuTick(
-        ax: Float, ay: Float, az: Float,
-        gx: Float, gy: Float, gz: Float,
-        isGnssOutage: Boolean,
-        gnssAccuracy: Float
-    ): NavigationTelemetry {
-        // 1. Instant Virtual Alignment (Refines gravity vector when stationary)
-        virtualAlignment.processSample(ax, ay, az, currentSpeedMs < 0.5f)
+    fun tick(isGnssOutage: Boolean, gnssAccuracy: Float): NavigationTelemetry {
+        var headingRate = 0f
 
-        val alignedAcc = FloatArray(3)
-        virtualAlignment.align(ax, ay, az, alignedAcc)
-
-        // 2. Preprocessor (2Hz Butterworth low-pass + Standardizer)
-        preprocessor.pushSample(
-            alignedAcc[0], alignedAcc[1], alignedAcc[2],
-            gz, gy, gx
-        )
-
-        val headingRate = gz * 57.2957795f // convert rad/s to deg/s
-
-        // 3. Model Inference & Dead Reckoning Navigation
         if (isGnssOutage && hasPositionFix) {
-            val tensor = preprocessor.getTensorData()
-            val prediction = model.runInference(tensor)
+            val windowList = imuSensorManager.sensorWindow.toList()
+            val (predSpeed, predHeading) = velocityEngine.predict(windowList)
 
-            // Smooth AI speed with Velocity Kalman Filter
-            currentSpeedMs = velocityKalman.update(prediction.speed)
+            // Extract last gyro Z (yaw rate in rad/s)
+            val lastFrame = windowList.lastOrNull()
+            if (lastFrame != null) {
+                headingRate = lastFrame[5] * 57.2957795f
+            }
 
-            // Integrate heading using gyroscope yaw rate
-            currentHeadingDeg = (currentHeadingDeg + (headingRate * DT)) % 360f
-            if (currentHeadingDeg < 0f) currentHeadingDeg += 360f
+            // Zero Velocity Update (ZUPT) check
+            if (predSpeed <= 0f) {
+                currentSpeedMs = 0f
+                velocityKalman.reset(0f)
+            } else {
+                currentSpeedMs = velocityKalman.update(predSpeed)
 
-            // Forward non-holonomic kinematic step
-            val stepDistance = currentSpeedMs * DT
-            drDistanceMeters += stepDistance
-            totalDistanceMeters += stepDistance
+                // Integrate heading from yaw rate
+                currentHeadingDeg = (currentHeadingDeg + (headingRate * DT)) % 360f
+                if (currentHeadingDeg < 0f) currentHeadingDeg += 360f
 
-            val headingRad = Math.toRadians(currentHeadingDeg.toDouble())
-            val deltaNorthMeters = stepDistance * cos(headingRad)
-            val deltaEastMeters = stepDistance * sin(headingRad)
+                val stepDistance = currentSpeedMs * DT
+                drDistanceMeters += stepDistance
+                totalDistanceMeters += stepDistance
 
-            val latRad = Math.toRadians(currentLatitude)
-            val deltaLat = deltaNorthMeters / METERS_PER_LAT_DEGREE
-            val deltaLon = deltaEastMeters / (METERS_PER_LAT_DEGREE * cos(latRad))
+                val headingRad = Math.toRadians(currentHeadingDeg.toDouble())
+                val deltaNorthMeters = stepDistance * cos(headingRad)
+                val deltaEastMeters = stepDistance * sin(headingRad)
 
-            currentLatitude += deltaLat
-            currentLongitude += deltaLon
+                val latRad = Math.toRadians(currentLatitude)
+                val deltaLat = deltaNorthMeters / METERS_PER_LAT_DEGREE
+                val deltaLon = deltaEastMeters / (METERS_PER_LAT_DEGREE * cos(latRad))
+
+                currentLatitude += deltaLat
+                currentLongitude += deltaLon
+            }
         }
 
         return NavigationTelemetry(
@@ -155,13 +152,6 @@ class DeadReckoningEngine(context: Context) {
         outageSeconds++
     }
 
-    fun setInitialCoordinate(lat: Double, lon: Double, heading: Float = 0f) {
-        currentLatitude = lat
-        currentLongitude = lon
-        currentHeadingDeg = heading
-        hasPositionFix = true
-    }
-
     private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLat = Math.toRadians(lat2 - lat1)
         val dLon = Math.toRadians(lon2 - lon1)
@@ -173,7 +163,7 @@ class DeadReckoningEngine(context: Context) {
     }
 
     fun reset() {
-        preprocessor.reset()
+        imuSensorManager.stopRecording()
         velocityKalman.reset()
         drDistanceMeters = 0.0
         totalDistanceMeters = 0.0

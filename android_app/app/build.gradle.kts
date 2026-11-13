@@ -66,4 +66,10 @@ dependencies {
 
     // Google Play Location Services
     implementation("com.google.android.gms:play-services-location:21.2.0")
+
+    // Gson JSON Parser
+    implementation("com.google.code.gson:gson:2.10.1")
+
+    // Microsoft ONNX Runtime Mobile
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.0")
 }
