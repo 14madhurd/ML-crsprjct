@@ -9,7 +9,6 @@ import java.io.InputStreamReader
  * Cutoff: 2.0 Hz, Sample Rate: 10.0 Hz.
  */
 class ButterworthFilterChannel {
-    // Coefficients matched to Python scipy.signal.butter(4, 2.0/5.0, btype='low')
     private val b = floatArrayOf(
         0.046582907f, 0.18633163f, 0.27949744f, 0.18633163f, 0.046582907f
     )
@@ -17,7 +16,6 @@ class ButterworthFilterChannel {
         1.0f, -0.7820952f, 0.67997855f, -0.1826757f, 0.030118875f
     )
 
-    // Direct Form II Transposed state registers
     private val d = FloatArray(4)
 
     fun filter(x: Float): Float {
@@ -36,7 +34,7 @@ class ButterworthFilterChannel {
 
 /**
  * Sensor preprocessor and sliding window manager.
- * Implements Phase 1 & 2 data pipeline on-device.
+ * Implements instant warmup so the AI model is ready from the very first second.
  */
 class SensorPreprocessor(context: Context) {
 
@@ -47,12 +45,9 @@ class SensorPreprocessor(context: Context) {
 
     private val filters = Array(NUM_FEATURES) { ButterworthFilterChannel() }
 
-    // Feature scaler values loaded from scaler_params.json
     private val means = FloatArray(NUM_FEATURES)
     private val scales = FloatArray(NUM_FEATURES)
 
-    // Circular buffer for 100 frames x 6 features
-    // Stored as [frame_idx][feature_idx]
     private val buffer = Array(WINDOW_SIZE) { FloatArray(NUM_FEATURES) }
     private var writeIndex = 0
     private var frameCount = 0
@@ -76,7 +71,6 @@ class SensorPreprocessor(context: Context) {
                 }
             }
         } catch (e: Exception) {
-            // Safe fallback defaults matching bulk dataset
             val defaultMeans = floatArrayOf(1.34f, 0.035f, 16.12f, -0.0006f, -0.0035f, -0.0002f)
             val defaultScales = floatArrayOf(15.96f, 1.17f, 170.05f, 0.076f, 0.200f, 0.112f)
             System.arraycopy(defaultMeans, 0, means, 0, NUM_FEATURES)
@@ -84,11 +78,6 @@ class SensorPreprocessor(context: Context) {
         }
     }
 
-    /**
-     * Ingest one 10Hz IMU frame:
-     * acc: [ax_aligned, ay_aligned, az_aligned]
-     * gyro: [yaw_rate, pitch_rate, roll_rate] in rad/s
-     */
     fun pushSample(
         axAligned: Float,
         ayAligned: Float,
@@ -105,30 +94,30 @@ class SensorPreprocessor(context: Context) {
             filtered[i] = (cleanVal - means[i]) / scales[i]
         }
 
-        buffer[writeIndex] = filtered
+        // Warm up entire buffer on first sample so inference is available instantly
+        if (frameCount == 0) {
+            for (i in 0 until WINDOW_SIZE) {
+                buffer[i] = filtered.clone()
+            }
+        } else {
+            buffer[writeIndex] = filtered
+        }
+
         writeIndex = (writeIndex + 1) % WINDOW_SIZE
         frameCount++
     }
 
-    fun isWindowReady(): Boolean = frameCount >= WINDOW_SIZE
+    // Always ready after the first sample!
+    fun isWindowReady(): Boolean = frameCount > 0
 
-    /**
-     * Extracts input tensor for 1D-CNN.
-     * Shape: (Channels/Features=6, Sequence_Length=100)
-     * Flattened size = 600 floats.
-     *
-     * Order: Channel 0 across 100 time steps, Channel 1 across 100 time steps, ...
-     */
     fun getTensorData(): FloatArray {
         val tensor = FloatArray(NUM_FEATURES * WINDOW_SIZE)
         val start = if (frameCount >= WINDOW_SIZE) writeIndex else 0
-        val count = minOf(frameCount, WINDOW_SIZE)
 
-        for (t in 0 until count) {
+        for (t in 0 until WINDOW_SIZE) {
             val bufIdx = (start + t) % WINDOW_SIZE
             val frame = buffer[bufIdx]
             for (f in 0 until NUM_FEATURES) {
-                // index in [6, 100] tensor: f * 100 + t
                 tensor[f * WINDOW_SIZE + t] = frame[f]
             }
         }

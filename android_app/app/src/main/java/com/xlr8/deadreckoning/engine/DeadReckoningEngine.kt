@@ -14,14 +14,15 @@ data class NavigationTelemetry(
     val headingRateDegPerSec: Float,
     val isGnssActive: Boolean,
     val drDistanceMeters: Double,
+    val totalTripDistanceMeters: Double,
     val outageDurationSeconds: Int,
     val accuracyMeters: Float
 )
 
 /**
  * Core Dead Reckoning Engine.
- * Integrates Virtual Alignment, Sensor Preprocessing, Dual-Head 1D-CNN Model,
- * Kalman Filter, and Non-Holonomic Kinematic Track Integrator.
+ * Integrates instant virtual alignment, 10Hz sensor preprocessor,
+ * pure Kotlin 1D-CNN neural network, and continuous kinematic positioning.
  */
 class DeadReckoningEngine(context: Context) {
 
@@ -40,11 +41,13 @@ class DeadReckoningEngine(context: Context) {
         private set
     var drDistanceMeters: Double = 0.0
         private set
+    var totalDistanceMeters: Double = 0.0
+        private set
     var outageSeconds: Int = 0
         private set
 
-    private var hasInitialFix: Boolean = false
-    private var lastGyroZ: Float = 0.0f
+    var hasPositionFix: Boolean = false
+        private set
 
     companion object {
         const val DT: Float = 0.1f // 10Hz sampling
@@ -55,10 +58,13 @@ class DeadReckoningEngine(context: Context) {
      * Called whenever a fresh valid GNSS fix arrives from the satellites.
      */
     fun onGnssLocationUpdate(location: Location) {
+        val prevLat = currentLatitude
+        val prevLon = currentLongitude
+
         currentLatitude = location.latitude
         currentLongitude = location.longitude
 
-        if (location.hasBearing() && location.speed > 1.0f) {
+        if (location.hasBearing() && location.speed > 0.8f) {
             currentHeadingDeg = location.bearing
         }
         if (location.hasSpeed()) {
@@ -66,21 +72,20 @@ class DeadReckoningEngine(context: Context) {
             velocityKalman.reset(currentSpeedMs)
         }
 
-        hasInitialFix = true
+        if (hasPositionFix && prevLat != 0.0 && prevLon != 0.0) {
+            val dist = calculateDistance(prevLat, prevLon, currentLatitude, currentLongitude)
+            if (dist < 100.0) { // filter GPS teleport jumps
+                totalDistanceMeters += dist
+            }
+        }
+
+        hasPositionFix = true
         drDistanceMeters = 0.0
         outageSeconds = 0
     }
 
     /**
-     * Called every 10Hz tick when IMU sensor samples are ready.
-     * @param ax Raw smartphone accelerometer X
-     * @param ay Raw smartphone accelerometer Y
-     * @param az Raw smartphone accelerometer Z
-     * @param gx Gyroscope roll rate (rad/s)
-     * @param gy Gyroscope pitch rate (rad/s)
-     * @param gz Gyroscope yaw rate (rad/s)
-     * @param isGnssOutage Whether the GNSS detector has flagged an outage
-     * @return Fresh telemetry update
+     * 10Hz sensor tick.
      */
     fun processImuTick(
         ax: Float, ay: Float, az: Float,
@@ -88,40 +93,36 @@ class DeadReckoningEngine(context: Context) {
         isGnssOutage: Boolean,
         gnssAccuracy: Float
     ): NavigationTelemetry {
-        lastGyroZ = gz
+        // 1. Instant Virtual Alignment (Refines gravity vector when stationary)
+        virtualAlignment.processSample(ax, ay, az, currentSpeedMs < 0.5f)
 
-        // 1. If calibrating, accumulate gravity
-        if (!virtualAlignment.isCalibrated) {
-            virtualAlignment.addCalibrationSample(ax, ay, az)
-        }
-
-        // 2. Virtual Alignment
         val alignedAcc = FloatArray(3)
         virtualAlignment.align(ax, ay, az, alignedAcc)
 
-        // 3. Preprocessor (2Hz Butterworth low-pass + Standardizer + Sliding window)
+        // 2. Preprocessor (2Hz Butterworth low-pass + Standardizer)
         preprocessor.pushSample(
             alignedAcc[0], alignedAcc[1], alignedAcc[2],
             gz, gy, gx
         )
 
-        // 4. Model Inference & Kinematics
-        var headingRate = gz * 57.2957795f // convert rad/s to deg/s
+        val headingRate = gz * 57.2957795f // convert rad/s to deg/s
 
-        if (isGnssOutage && hasInitialFix && preprocessor.isWindowReady()) {
+        // 3. Model Inference & Dead Reckoning Navigation
+        if (isGnssOutage && hasPositionFix) {
             val tensor = preprocessor.getTensorData()
             val prediction = model.runInference(tensor)
 
-            // Smooth AI speed with Velocity Kalman Filter (Phase 6)
+            // Smooth AI speed with Velocity Kalman Filter
             currentSpeedMs = velocityKalman.update(prediction.speed)
 
-            // Update heading from gyroscope yaw rate
+            // Integrate heading using gyroscope yaw rate
             currentHeadingDeg = (currentHeadingDeg + (headingRate * DT)) % 360f
             if (currentHeadingDeg < 0f) currentHeadingDeg += 360f
 
             // Forward non-holonomic kinematic step
             val stepDistance = currentSpeedMs * DT
             drDistanceMeters += stepDistance
+            totalDistanceMeters += stepDistance
 
             val headingRad = Math.toRadians(currentHeadingDeg.toDouble())
             val deltaNorthMeters = stepDistance * cos(headingRad)
@@ -144,6 +145,7 @@ class DeadReckoningEngine(context: Context) {
             headingRateDegPerSec = headingRate,
             isGnssActive = !isGnssOutage,
             drDistanceMeters = drDistanceMeters,
+            totalTripDistanceMeters = totalDistanceMeters,
             outageDurationSeconds = outageSeconds,
             accuracyMeters = if (isGnssOutage) (drDistanceMeters * 0.05 + 5.0).toFloat() else gnssAccuracy
         )
@@ -157,14 +159,24 @@ class DeadReckoningEngine(context: Context) {
         currentLatitude = lat
         currentLongitude = lon
         currentHeadingDeg = heading
-        hasInitialFix = true
+        hasPositionFix = true
+    }
+
+    private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = sin(dLat / 2) * sin(dLat / 2) +
+                cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
+                sin(dLon / 2) * sin(dLon / 2)
+        val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+        return 6371000.0 * c
     }
 
     fun reset() {
         preprocessor.reset()
         velocityKalman.reset()
         drDistanceMeters = 0.0
+        totalDistanceMeters = 0.0
         outageSeconds = 0
-        hasInitialFix = false
     }
 }

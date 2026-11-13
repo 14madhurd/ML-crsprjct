@@ -11,3 +11,14 @@ venv/
 
 # Sensitive files
 .env
+
+# Android Studio & Gradle
+.idea/
+*.iml
+.gradle/
+build/
+**/build/
+local.properties
+android_app/local.properties
+android_app/.gradle/
+android_app/app/build/

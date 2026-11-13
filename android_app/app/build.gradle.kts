@@ -15,9 +15,6 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        ndk {
-            abiFilters.addAll(setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
-        }
     }
 
     buildTypes {
@@ -62,7 +59,6 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // OpenStreetMap Real-Time Map
@@ -70,8 +66,4 @@ dependencies {
 
     // Google Play Location Services
     implementation("com.google.android.gms:play-services-location:21.2.0")
-
-    // PyTorch Mobile Android Runtime
-    implementation("org.pytorch:pytorch_android:1.13.1")
-    implementation("org.pytorch:pytorch_android_torchvision:1.13.1")
 }

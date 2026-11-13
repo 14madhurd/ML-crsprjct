@@ -6,11 +6,11 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Dynamic Virtual Alignment module.
+ * Instantaneous Virtual Alignment.
  *
- * Implements stationary gravity vector attitude estimation (Phase 1).
- * Computes Pitch and Roll Euler angles relative to gravity and projects
- * arbitrary smartphone mounting acceleration into the vehicle body frame.
+ * Resolves phone mounting orientation instantly from the first accelerometer reading.
+ * Zero wait time, zero 5-second calibration delay.
+ * Continuously refines the gravity vector during low-speed periods using an exponential moving average.
  */
 class VirtualAlignment {
 
@@ -29,46 +29,34 @@ class VirtualAlignment {
     var isCalibrated: Boolean = false
         private set
 
-    private val calibrationSamples = ArrayList<FloatArray>()
-    private val requiredSamples = 50 // ~5 seconds @ 10Hz
-
-    fun resetCalibration() {
-        calibrationSamples.clear()
-        isCalibrated = false
-        r00 = 1.0f; r01 = 0.0f; r02 = 0.0f
-        r10 = 0.0f; r11 = 1.0f; r12 = 0.0f
-        r20 = 0.0f; r21 = 0.0f; r22 = 1.0f
-    }
+    private var filteredGx = 0.0
+    private var filteredGy = 0.0
+    private var filteredGz = 9.81
 
     /**
-     * Feed stationary acceleration sample (ax, ay, az).
-     * Returns true when calibration finishes.
+     * Instantly calibrates attitude from the very first frame.
      */
-    fun addCalibrationSample(ax: Float, ay: Float, az: Float): Boolean {
-        calibrationSamples.add(floatArrayOf(ax, ay, az))
-        if (calibrationSamples.size >= requiredSamples) {
-            computeMatrixFromSamples()
+    fun processSample(ax: Float, ay: Float, az: Float, isStationary: Boolean) {
+        if (!isCalibrated) {
+            filteredGx = ax.toDouble()
+            filteredGy = ay.toDouble()
+            filteredGz = az.toDouble()
+            updateRotationMatrix(filteredGx, filteredGy, filteredGz)
             isCalibrated = true
-            return true
+            return
         }
-        return false
+
+        // Continuously refine gravity estimate when stationary
+        if (isStationary) {
+            val alpha = 0.05
+            filteredGx = (1 - alpha) * filteredGx + alpha * ax
+            filteredGy = (1 - alpha) * filteredGy + alpha * ay
+            filteredGz = (1 - alpha) * filteredGz + alpha * az
+            updateRotationMatrix(filteredGx, filteredGy, filteredGz)
+        }
     }
 
-    private fun computeMatrixFromSamples() {
-        var sumX = 0.0
-        var sumY = 0.0
-        var sumZ = 0.0
-        for (s in calibrationSamples) {
-            sumX += s[0]
-            sumY += s[1]
-            sumZ += s[2]
-        }
-        val n = calibrationSamples.size.toDouble()
-        val gx = sumX / n
-        val gy = sumY / n
-        val gz = sumZ / n
-
-        // Phase 1 Euler angles
+    private fun updateRotationMatrix(gx: Double, gy: Double, gz: Double) {
         val pitch = atan2(-gx, sqrt(gy * gy + gz * gz))
         val roll = atan2(gy, gz)
 
@@ -78,8 +66,6 @@ class VirtualAlignment {
         val sr = sin(roll).toFloat()
 
         // R = Ry(pitch) * Rx(roll)
-        // Ry = [[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]]
-        // Rx = [[1, 0, 0], [0, cr, -sr], [0, sr, cr]]
         r00 = cp
         r01 = sp * sr
         r02 = sp * cr
@@ -94,8 +80,7 @@ class VirtualAlignment {
     }
 
     /**
-     * Transform raw acceleration vector into vehicle aligned coordinates.
-     * Output: FloatArray of size 3 [acc_x_aligned, acc_y_aligned, acc_z_aligned]
+     * Rotate raw phone acceleration into the vehicle body frame.
      */
     fun align(ax: Float, ay: Float, az: Float, result: FloatArray) {
         result[0] = r00 * ax + r01 * ay + r02 * az
