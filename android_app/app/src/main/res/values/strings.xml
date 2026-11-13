@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">XLR8 Dead Reckoning</string>
+
+    <!-- Status Strings -->
+    <string name="status_ready">SYSTEM READY</string>
+    <string name="status_gnss_active">GNSS ACTIVE</string>
+    <string name="status_dr_active">DEAD RECKONING ACTIVE (OUTAGE)</string>
+    <string name="status_calibrating">CALIBRATING SENSORS (KEEP STILL)</string>
+
+    <string name="source_gnss">Source: Satellite Positioning</string>
+    <string name="source_dr">Source: Neural Inertial Odometry (1D-CNN)</string>
+    <string name="source_idle">Source: Idle</string>
+
+    <!-- Metrics Labels -->
+    <string name="label_speed">SPEED</string>
+    <string name="label_heading">HEADING</string>
+    <string name="label_dr_dist">DR DISTANCE</string>
+    <string name="label_accuracy">ACCURACY</string>
+
+    <!-- Buttons & Controls -->
+    <string name="btn_start">Start Navigation</string>
+    <string name="btn_stop">Stop Navigation</string>
+    <string name="btn_calibrate">Recalibrate</string>
+    <string name="switch_simulate_outage">Simulate GNSS Outage (Tunnel)</string>
+
+    <!-- Dialogs & Warnings -->
+    <string name="perm_location_rationale">High-precision location access is required to synchronize GNSS and detect outages.</string>
+</resources>

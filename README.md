@@ -95,7 +95,15 @@ flowchart TD
 
 ```
 ML/
+├── android_app/                          # Full Android Studio Edge-Deployment Project
+│   ├── app/                              # Android application module
+│   │   ├── src/main/assets/              # Embedded PyTorch model (.pt) & scaler_params.json
+│   │   ├── src/main/java/com/xlr8/...    # Kotlin Neural Engine, Kalman Filter & Outage Detector
+│   │   └── src/main/res/                 # Minimalist, emoji-free clean automotive UI & map layout
+│   └── build.gradle.kts                  # Gradle build scripts (osmdroid + PyTorch Mobile)
+│
 ├── data/
+│   ├── bulk_velocity_cnn.pt              # TorchScript optimized model for Android Mobile
 │   ├── bulk_velocity_cnn.pth             # Trained Dual-Head 1D-CNN PyTorch weights
 │   ├── velocity_cnn.pth                  # Baseline single-head 1D-CNN weights
 │   ├── scaler_params.json                # Global feature standardization parameters (mean, scale)

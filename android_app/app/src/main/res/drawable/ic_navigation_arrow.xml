@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- Directional arrow pointing up (North) -->
+    <path
+        android:fillColor="@color/accent_blue"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:pathData="M24,4 L40,42 L24,32 L8,42 Z" />
+    <path
+        android:fillColor="#1D4ED8"
+        android:pathData="M24,4 L24,32 L8,42 Z" />
+</vector>
