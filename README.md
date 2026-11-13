@@ -36,7 +36,7 @@ $$\text{velocity} = \int a \, dt, \quad \text{position} = \iint a \, dt^2$$
 
 With low-cost MEMS sensors found in commercial smartphones, accelerometer bias, drift, and noise cause integration errors that compound quadratically with time, drifting by hundreds of meters in under 30 seconds.
 
-**XLR8@KT solves this problem** by replacing double integration with an **Intelligent Dead Reckoning (IDR)** engine:
+**. solves this problem** by replacing double integration with an **Intelligent Dead Reckoning (IDR)** engine:
 1. Translates high-frequency smartphone IMU vibrations directly into forward vehicle velocity and heading rate using a **Multi-Task Dual-Head 1D-CNN**.
 2. Dynamically compensates for arbitrary phone mounting orientations through **gravity-vector virtual alignment**.
 3. Employs a **Kalman Filter Deficit Handler** that uses GNSS when available and switches smoothly to AI-predicted velocity during blackouts.
@@ -296,6 +296,6 @@ The repository includes pre-generated high-resolution evaluation figures located
 ---
 
 ## 👥 Contributors & Acknowledgements
-- Developed for **XLR8@KT / Machine Learning Course Project**.
+- Developed for **. / Machine Learning Course Project**.
 - Datasets inspired by and structured following standard vehicle benchmark datasets (IO-VNBD / Oxford RobotCar formats).
 - Maintained by [14madhurd](https://github.com/14madhurd).
